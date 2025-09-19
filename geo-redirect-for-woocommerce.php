@@ -105,9 +105,9 @@ class WC_Geo_Redirect {
         // Check WooCommerce dependency
         add_action('plugins_loaded', array($this, 'check_dependencies'));
         
-        // Frontend redirect logic
+        // Frontend redirect logic - use template_redirect for better compatibility
         if (!is_admin() && !wp_doing_ajax() && !wp_doing_cron()) {
-            add_action('init', array($this, 'maybe_redirect'), 1);
+            add_action('template_redirect', array($this, 'maybe_redirect'), 1);
         }
         
         // Add store switcher
@@ -190,6 +190,30 @@ class WC_Geo_Redirect {
      * @since 1.0.0
      */
     public function maybe_redirect() {
+        // Don't redirect if not enabled
+        if (!get_option('wc_geo_redirect_enabled', true)) {
+            return;
+        }
+        
+        // Skip login/register/password reset pages
+        if (is_user_logged_in() || is_login() || is_register() || wp_login_url() === ( $_SERVER['REQUEST_URI'] ?? '' )) {
+            return;
+        }
+        
+        // Skip wp-admin, wp-login.php, and system files
+        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+        $skip_paths = array('/wp-admin', '/wp-login.php', '/wp-cron.php', '/xmlrpc.php', '/wp-json');
+        foreach ($skip_paths as $path) {
+            if (strpos($request_uri, $path) !== false) {
+                return;
+            }
+        }
+        
+        // Skip if already redirected (prevent loops)
+        if (isset($_GET['geo_redirected'])) {
+            return;
+        }
+        
         // Security check for nonce if coming from form submission
         if (isset($_POST['_wpnonce']) && !wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), 'wc_geo_redirect')) {
             return;
@@ -210,6 +234,11 @@ class WC_Geo_Redirect {
             return;
         }
         
+        // Skip local development domains
+        if ($this->is_local_development()) {
+            return;
+        }
+        
         // Get visitor country
         $country = $this->get_visitor_country();
         if (empty($country)) {
@@ -220,13 +249,17 @@ class WC_Geo_Redirect {
         $current_host = sanitize_text_field($_SERVER['HTTP_HOST'] ?? '');
         $redirect_to = null;
         
-        if ('US' === $country && false !== strpos($current_host, '.ca')) {
+        // Check for domain match more precisely
+        $is_ca_site = ($current_host === $this->ca_domain || $current_host === 'www.' . $this->ca_domain);
+        $is_us_site = ($current_host === $this->us_domain || $current_host === 'www.' . $this->us_domain);
+        
+        if ('US' === $country && $is_ca_site) {
             $redirect_to = $this->us_domain;
-        } elseif ('CA' === $country && false !== strpos($current_host, '.com')) {
+        } elseif ('CA' === $country && $is_us_site) {
             $redirect_to = $this->ca_domain;
         }
         
-        if ($redirect_to) {
+        if ($redirect_to && $redirect_to !== $current_host) {
             $this->perform_redirect($redirect_to);
         }
     }
@@ -240,16 +273,43 @@ class WC_Geo_Redirect {
     private function perform_redirect($domain) {
         // Build redirect URL - maintain path and query string
         $request_uri = sanitize_text_field($_SERVER['REQUEST_URI'] ?? '/');
-        $redirect_url = 'https://' . $domain . $request_uri;
+        
+        // Add geo_redirected parameter to prevent loops
+        $separator = (strpos($request_uri, '?') !== false) ? '&' : '?';
+        $redirect_url = 'https://' . $domain . $request_uri . $separator . 'geo_redirected=1';
         
         // Validate URL
         if (!wp_http_validate_url($redirect_url)) {
             return;
         }
         
+        // Log redirect for debugging
+        if (WP_DEBUG && WP_DEBUG_LOG) {
+            error_log('WC Geo Redirect: Redirecting to ' . $redirect_url);
+        }
+        
         // Use WordPress safe redirect with 302 (temporary)
         wp_safe_redirect($redirect_url, 302);
         exit;
+    }
+    
+    /**
+     * Check if local development environment
+     * 
+     * @since 1.0.0
+     * @return bool
+     */
+    private function is_local_development() {
+        $local_domains = array('localhost', '.local', '.test', '.dev', '127.0.0.1', '::1');
+        $current_host = $_SERVER['HTTP_HOST'] ?? '';
+        
+        foreach ($local_domains as $local) {
+            if (strpos($current_host, $local) !== false) {
+                return true;
+            }
+        }
+        
+        return false;
     }
     
     /**
@@ -259,22 +319,36 @@ class WC_Geo_Redirect {
      * @return string|null Country code or null if not found
      */
     private function get_visitor_country() {
-        // Method 1: WooCommerce geolocation cookie
+        // Testing override (only in debug mode)
+        if (WP_DEBUG && isset($_GET['test_country'])) {
+            return sanitize_text_field($_GET['test_country']);
+        }
+        
+        // Method 1: Check for CDN country headers (CloudFlare, etc)
+        $cdn_headers = array(
+            'HTTP_CF_IPCOUNTRY',        // CloudFlare
+            'HTTP_CLOUDFRONT_VIEWER_COUNTRY', // AWS CloudFront
+            'HTTP_X_COUNTRY_CODE',       // Various CDNs
+            'HTTP_X_GEO_COUNTRY'         // Various CDNs
+        );
+        
+        foreach ($cdn_headers as $header) {
+            if (!empty($_SERVER[$header]) && $_SERVER[$header] !== 'XX') {
+                return sanitize_text_field($_SERVER[$header]);
+            }
+        }
+        
+        // Method 2: WooCommerce geolocation cookie
         if (isset($_COOKIE['woocommerce_geo_country'])) {
             return sanitize_text_field($_COOKIE['woocommerce_geo_country']);
         }
         
-        // Method 2: WooCommerce Geolocation API
+        // Method 3: WooCommerce Geolocation API
         if (class_exists('WC_Geolocation')) {
             $geo = WC_Geolocation::geolocate_ip();
             if (!empty($geo['country'])) {
                 return $geo['country'];
             }
-        }
-        
-        // Method 3: CloudFlare header (if using CloudFlare)
-        if (!empty($_SERVER['HTTP_CF_IPCOUNTRY'])) {
-            return sanitize_text_field($_SERVER['HTTP_CF_IPCOUNTRY']);
         }
         
         return null;
