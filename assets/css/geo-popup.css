@@ -1,0 +1,244 @@
+/**
+ * WooCommerce Geo-Redirect Popup Styles
+ *
+ * @package WooCommerceGeoRedirect
+ * @since 1.0.0
+ */
+
+/* Popup Container */
+.wc-geo-popup-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    max-width: 380px;
+    width: calc(100% - 40px);
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+    z-index: 999999;
+    opacity: 0;
+    transform: translateY(-20px);
+    animation: wcGeoFadeInDown 0.4s ease forwards;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+}
+
+.wc-geo-popup-container.wc-geo-popup-hiding {
+    animation: wcGeoFadeOutUp 0.3s ease forwards;
+}
+
+/* Header with flag */
+.wc-geo-popup-header {
+    display: flex;
+    align-items: center;
+    padding: 20px;
+    border-bottom: 1px solid #f0f0f0;
+    position: relative;
+}
+
+.wc-geo-popup-flag {
+    font-size: 32px;
+    margin-right: 15px;
+    line-height: 1;
+}
+
+.wc-geo-popup-title {
+    flex: 1;
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: #2c3338;
+    line-height: 1.4;
+}
+
+/* Close button */
+.wc-geo-popup-close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    opacity: 0.6;
+    transition: opacity 0.2s ease;
+}
+
+.wc-geo-popup-close:hover {
+    opacity: 1;
+}
+
+.wc-geo-popup-close:before,
+.wc-geo-popup-close:after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 14px;
+    height: 2px;
+    background: #50575e;
+    transform-origin: center;
+}
+
+.wc-geo-popup-close:before {
+    transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.wc-geo-popup-close:after {
+    transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+/* Content */
+.wc-geo-popup-content {
+    padding: 20px;
+}
+
+.wc-geo-popup-message {
+    margin: 0 0 20px 0;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #50575e;
+}
+
+/* Benefits list */
+.wc-geo-popup-benefits {
+    list-style: none;
+    margin: 0 0 20px 0;
+    padding: 0;
+}
+
+.wc-geo-popup-benefits li {
+    position: relative;
+    padding-left: 24px;
+    margin-bottom: 8px;
+    font-size: 14px;
+    color: #50575e;
+}
+
+.wc-geo-popup-benefits li:before {
+    content: '✓';
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: #00a32a;
+    font-weight: bold;
+}
+
+/* Buttons */
+.wc-geo-popup-buttons {
+    display: flex;
+    gap: 10px;
+}
+
+.wc-geo-popup-button {
+    flex: 1;
+    padding: 12px 20px;
+    border-radius: 4px;
+    font-size: 14px;
+    font-weight: 500;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    border: 1px solid transparent;
+    line-height: 1.2;
+}
+
+.wc-geo-popup-button-primary {
+    background: #2271b1;
+    color: #fff;
+    border-color: #2271b1;
+}
+
+.wc-geo-popup-button-primary:hover {
+    background: #135e96;
+    border-color: #135e96;
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(34, 113, 177, 0.25);
+}
+
+.wc-geo-popup-button-secondary {
+    background: #fff;
+    color: #50575e;
+    border-color: #c3c4c7;
+}
+
+.wc-geo-popup-button-secondary:hover {
+    background: #f6f7f7;
+    border-color: #8c8f94;
+    color: #2c3338;
+}
+
+/* Animations */
+@keyframes wcGeoFadeInDown {
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes wcGeoFadeOutUp {
+    to {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+}
+
+/* Mobile responsiveness */
+@media (max-width: 480px) {
+    .wc-geo-popup-container {
+        top: 10px;
+        right: 10px;
+        left: 10px;
+        width: auto;
+        max-width: none;
+    }
+
+    .wc-geo-popup-header {
+        padding: 16px;
+    }
+
+    .wc-geo-popup-content {
+        padding: 16px;
+    }
+
+    .wc-geo-popup-buttons {
+        flex-direction: column;
+    }
+
+    .wc-geo-popup-button-secondary {
+        order: 2;
+    }
+}
+
+/* Dark overlay for mobile */
+@media (max-width: 480px) {
+    .wc-geo-popup-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 999998;
+        opacity: 0;
+        animation: wcGeoFadeIn 0.3s ease forwards;
+    }
+
+    .wc-geo-popup-overlay.wc-geo-popup-hiding {
+        animation: wcGeoFadeOut 0.3s ease forwards;
+    }
+
+    @keyframes wcGeoFadeIn {
+        to {
+            opacity: 1;
+        }
+    }
+
+    @keyframes wcGeoFadeOut {
+        to {
+            opacity: 0;
+        }
+    }
+}

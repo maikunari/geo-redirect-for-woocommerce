@@ -143,6 +143,12 @@ class WC_Geo_Redirect {
 
         // Add allowed redirect hosts for cross-domain redirects
         add_filter('allowed_redirect_hosts', array($this, 'add_allowed_redirect_hosts'));
+
+        // Cache compatibility - Breeze
+        add_filter('breeze_excluded_urls', array($this, 'breeze_exclude_ajax'));
+
+        // Cache compatibility - exclude AJAX from caching
+        add_action('init', array($this, 'set_cache_headers'));
     }
     
     /**
@@ -407,8 +413,64 @@ class WC_Geo_Redirect {
     }
     
     /**
+     * Exclude AJAX from Breeze cache
+     *
+     * @since 1.0.0
+     * @param array $urls
+     * @return array
+     */
+    public function breeze_exclude_ajax($urls) {
+        $urls[] = 'wp-admin/admin-ajax.php';
+        $urls[] = 'action=wc_geo_check_location';
+        return $urls;
+    }
+
+    /**
+     * Set cache headers for AJAX requests
+     *
+     * @since 1.0.0
+     */
+    public function set_cache_headers() {
+        if (wp_doing_ajax() && isset($_POST['action']) && $_POST['action'] === 'wc_geo_check_location') {
+            header('Cache-Control: no-cache, no-store, must-revalidate');
+            header('Pragma: no-cache');
+            header('Expires: 0');
+        }
+    }
+
+    /**
+     * Get client IP address
+     *
+     * @since 1.0.0
+     * @return string
+     */
+    private function get_client_ip() {
+        // Check for CloudFlare
+        if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
+            return $_SERVER['HTTP_CF_CONNECTING_IP'];
+        }
+
+        // Check for proxy headers
+        $headers = array(
+            'HTTP_X_REAL_IP',
+            'HTTP_X_FORWARDED_FOR',
+            'HTTP_CLIENT_IP',
+        );
+
+        foreach ($headers as $header) {
+            if (!empty($_SERVER[$header])) {
+                $ips = explode(',', $_SERVER[$header]);
+                return trim($ips[0]);
+            }
+        }
+
+        // Default to REMOTE_ADDR
+        return $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+    }
+
+    /**
      * Get visitor's country code
-     * 
+     *
      * @since 1.0.0
      * @return string|null Country code or null if not found
      */
@@ -416,6 +478,15 @@ class WC_Geo_Redirect {
         // Testing override (only in debug mode)
         if (WP_DEBUG && isset($_GET['test_country'])) {
             return sanitize_text_field($_GET['test_country']);
+        }
+
+        // Check transient cache for IP-based country
+        $ip_address = $this->get_client_ip();
+        $cache_key = 'wc_geo_country_' . md5($ip_address);
+        $cached_country = get_transient($cache_key);
+
+        if ($cached_country !== false) {
+            return $cached_country;
         }
         
         // Method 1: Check for CDN country headers (CloudFlare, etc)
@@ -428,23 +499,34 @@ class WC_Geo_Redirect {
         
         foreach ($cdn_headers as $header) {
             if (!empty($_SERVER[$header]) && $_SERVER[$header] !== 'XX') {
-                return sanitize_text_field($_SERVER[$header]);
+                $country = sanitize_text_field($_SERVER[$header]);
+                // Cache for 1 hour
+                set_transient($cache_key, $country, HOUR_IN_SECONDS);
+                return $country;
             }
         }
-        
+
         // Method 2: WooCommerce geolocation cookie
         if (isset($_COOKIE['woocommerce_geo_country'])) {
-            return sanitize_text_field($_COOKIE['woocommerce_geo_country']);
+            $country = sanitize_text_field($_COOKIE['woocommerce_geo_country']);
+            // Cache for 1 hour
+            set_transient($cache_key, $country, HOUR_IN_SECONDS);
+            return $country;
         }
-        
+
         // Method 3: WooCommerce Geolocation API
         if (class_exists('WC_Geolocation')) {
             $geo = WC_Geolocation::geolocate_ip();
             if (!empty($geo['country'])) {
-                return $geo['country'];
+                $country = $geo['country'];
+                // Cache for 1 hour
+                set_transient($cache_key, $country, HOUR_IN_SECONDS);
+                return $country;
             }
         }
-        
+
+        // Cache empty result for 10 minutes to avoid repeated lookups
+        set_transient($cache_key, '', 10 * MINUTE_IN_SECONDS);
         return null;
     }
     
@@ -483,13 +565,23 @@ class WC_Geo_Redirect {
             ));
         }
 
+        // Check for test mode
+        $test_popup = isset($_POST['test_popup']) && $_POST['test_popup'] === '1';
+
         // Get visitor country
         $country = $this->get_visitor_country();
-        if (empty($country)) {
+
+        // Allow testing without country detection
+        if (!$test_popup && empty($country)) {
             wp_send_json(array(
                 'shouldSuggest' => false,
                 'reason' => 'no_country_detected'
             ));
+        }
+
+        // Use US as default for testing
+        if ($test_popup && empty($country)) {
+            $country = 'US';
         }
 
         // Get current host
@@ -509,15 +601,15 @@ class WC_Geo_Redirect {
         $message = '';
         $storeName = '';
 
-        if ($country === 'US' && $current_host_clean === $ca_domain_clean) {
+        if ($country === 'US' && ($current_host_clean === $ca_domain_clean || $test_popup)) {
             $shouldSuggest = true;
             $redirectUrl = 'https://' . $this->us_domain;
-            $message = __('It looks like you\'re visiting from the United States. Would you like to switch to our US store for local currency and shipping?', 'wc-geo-redirect');
+            $message = get_option('wc_geo_redirect_message_us', __('It looks like you\'re visiting from the United States. Would you like to switch to our US store for local currency and shipping?', 'wc-geo-redirect'));
             $storeName = __('US Store', 'wc-geo-redirect');
         } elseif ($country === 'CA' && $current_host_clean === $us_domain_clean) {
             $shouldSuggest = true;
             $redirectUrl = 'https://' . $this->ca_domain;
-            $message = __('It looks like you\'re visiting from Canada. Would you like to switch to our Canadian store for local currency and shipping?', 'wc-geo-redirect');
+            $message = get_option('wc_geo_redirect_message_ca', __('It looks like you\'re visiting from Canada. Would you like to switch to our Canadian store for local currency and shipping?', 'wc-geo-redirect'));
             $storeName = __('Canadian Store', 'wc-geo-redirect');
         }
 
@@ -552,6 +644,14 @@ class WC_Geo_Redirect {
             return;
         }
 
+        // Register and enqueue the CSS
+        wp_enqueue_style(
+            'wc-geo-popup',
+            WC_GEO_REDIRECT_PLUGIN_URL . 'assets/css/geo-popup.css',
+            array(),
+            WC_GEO_REDIRECT_VERSION
+        );
+
         // Register and enqueue the script
         wp_enqueue_script(
             'wc-geo-popup',
@@ -566,7 +666,9 @@ class WC_Geo_Redirect {
             'ajax_url' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce('wc_geo_redirect_ajax'),
             'cookie_name' => $this->cookie_name,
-            'cookie_days' => $this->cookie_duration
+            'cookie_days' => $this->cookie_duration,
+            'popup_delay' => get_option('wc_geo_redirect_popup_delay', 2) * 1000, // Convert to milliseconds
+            'debug_mode' => defined('WP_DEBUG') && WP_DEBUG
         ));
     }
 
@@ -721,6 +823,36 @@ class WC_Geo_Redirect {
                 'default' => 'popup'
             )
         );
+
+        register_setting(
+            'wc_geo_redirect_settings',
+            'wc_geo_redirect_popup_delay',
+            array(
+                'type' => 'number',
+                'sanitize_callback' => 'absint',
+                'default' => 2
+            )
+        );
+
+        register_setting(
+            'wc_geo_redirect_settings',
+            'wc_geo_redirect_message_us',
+            array(
+                'type' => 'string',
+                'sanitize_callback' => 'sanitize_textarea_field',
+                'default' => __('It looks like you\'re visiting from the United States. Would you like to switch to our US store for local currency and shipping?', 'wc-geo-redirect')
+            )
+        );
+
+        register_setting(
+            'wc_geo_redirect_settings',
+            'wc_geo_redirect_message_ca',
+            array(
+                'type' => 'string',
+                'sanitize_callback' => 'sanitize_textarea_field',
+                'default' => __('It looks like you\'re visiting from Canada. Would you like to switch to our Canadian store for local currency and shipping?', 'wc-geo-redirect')
+            )
+        );
     }
 
     /**
@@ -860,6 +992,40 @@ class WC_Geo_Redirect {
                         </td>
                     </tr>
                 </table>
+
+                <h2><?php esc_html_e('Popup Settings', 'wc-geo-redirect'); ?></h2>
+                <table class="form-table" role="presentation">
+                    <tr>
+                        <th scope="row">
+                            <label for="wc_geo_redirect_popup_delay"><?php esc_html_e('Popup Delay', 'wc-geo-redirect'); ?></label>
+                        </th>
+                        <td>
+                            <input type="number" id="wc_geo_redirect_popup_delay" name="wc_geo_redirect_popup_delay" value="<?php echo esc_attr(get_option('wc_geo_redirect_popup_delay', 2)); ?>" min="0" max="30" class="small-text" />
+                            <span><?php esc_html_e('seconds', 'wc-geo-redirect'); ?></span>
+                            <p class="description"><?php esc_html_e('How long to wait before showing the popup (0-30 seconds)', 'wc-geo-redirect'); ?></p>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th scope="row">
+                            <label for="wc_geo_redirect_message_us"><?php esc_html_e('US Visitor Message', 'wc-geo-redirect'); ?></label>
+                        </th>
+                        <td>
+                            <textarea id="wc_geo_redirect_message_us" name="wc_geo_redirect_message_us" rows="3" class="large-text"><?php echo esc_textarea(get_option('wc_geo_redirect_message_us', __('It looks like you\'re visiting from the United States. Would you like to switch to our US store for local currency and shipping?', 'wc-geo-redirect'))); ?></textarea>
+                            <p class="description"><?php esc_html_e('Message shown to US visitors on the Canadian site', 'wc-geo-redirect'); ?></p>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th scope="row">
+                            <label for="wc_geo_redirect_message_ca"><?php esc_html_e('Canadian Visitor Message', 'wc-geo-redirect'); ?></label>
+                        </th>
+                        <td>
+                            <textarea id="wc_geo_redirect_message_ca" name="wc_geo_redirect_message_ca" rows="3" class="large-text"><?php echo esc_textarea(get_option('wc_geo_redirect_message_ca', __('It looks like you\'re visiting from Canada. Would you like to switch to our Canadian store for local currency and shipping?', 'wc-geo-redirect'))); ?></textarea>
+                            <p class="description"><?php esc_html_e('Message shown to Canadian visitors on the US site', 'wc-geo-redirect'); ?></p>
+                        </td>
+                    </tr>
+                </table>
                 
                 <?php submit_button(__('Save Settings', 'wc-geo-redirect')); ?>
             </form>
@@ -915,11 +1081,24 @@ class WC_Geo_Redirect {
 
                 <?php if (WP_DEBUG): ?>
                 <h3><?php esc_html_e('Debug Mode', 'wc-geo-redirect'); ?></h3>
-                <p><?php esc_html_e('Debug mode is enabled. You can test redirects using:', 'wc-geo-redirect'); ?></p>
-                <ul style="list-style-type: disc; margin-left: 20px;">
-                    <li><code><?php echo esc_html(home_url('/?test_country=US')); ?></code> - <?php esc_html_e('Test as US visitor', 'wc-geo-redirect'); ?></li>
-                    <li><code><?php echo esc_html(home_url('/?test_country=CA')); ?></code> - <?php esc_html_e('Test as Canadian visitor', 'wc-geo-redirect'); ?></li>
-                </ul>
+                <p><?php esc_html_e('Debug mode is enabled. You can test the plugin using:', 'wc-geo-redirect'); ?></p>
+
+                <?php $mode = get_option('wc_geo_redirect_mode', 'popup'); ?>
+                <?php if ($mode === 'redirect'): ?>
+                    <h4><?php esc_html_e('Redirect Mode Testing:', 'wc-geo-redirect'); ?></h4>
+                    <ul style="list-style-type: disc; margin-left: 20px;">
+                        <li><code><?php echo esc_html(home_url('/?test_country=US')); ?></code> - <?php esc_html_e('Test as US visitor', 'wc-geo-redirect'); ?></li>
+                        <li><code><?php echo esc_html(home_url('/?test_country=CA')); ?></code> - <?php esc_html_e('Test as Canadian visitor', 'wc-geo-redirect'); ?></li>
+                    </ul>
+                <?php else: ?>
+                    <h4><?php esc_html_e('Popup Mode Testing:', 'wc-geo-redirect'); ?></h4>
+                    <ul style="list-style-type: disc; margin-left: 20px;">
+                        <li><code><?php echo esc_html(home_url('/?test_popup=1')); ?></code> - <?php esc_html_e('Force show popup (ignores cookies)', 'wc-geo-redirect'); ?></li>
+                        <li><code><?php echo esc_html(home_url('/?test_country=US')); ?></code> - <?php esc_html_e('Test as US visitor', 'wc-geo-redirect'); ?></li>
+                        <li><code><?php echo esc_html(home_url('/?test_country=CA')); ?></code> - <?php esc_html_e('Test as Canadian visitor', 'wc-geo-redirect'); ?></li>
+                    </ul>
+                    <p><?php esc_html_e('Open browser console to see debug logs.', 'wc-geo-redirect'); ?></p>
+                <?php endif; ?>
                 <?php endif; ?>
             </div>
         </div>
