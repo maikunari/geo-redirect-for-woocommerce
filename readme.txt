@@ -1,6 +1,6 @@
 # WooCommerce Geo-Redirect for Dual Stores
 
-**Contributors:** yourcompany  
+**Contributors:** maikunari  
 **Tags:** woocommerce, geolocation, redirect, multi-store, regional  
 **Requires at least:** WordPress 5.8  
 **Tested up to:** WordPress 6.4  
