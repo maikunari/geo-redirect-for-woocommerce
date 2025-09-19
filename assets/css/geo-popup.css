@@ -33,12 +33,23 @@
     padding: 20px;
     border-bottom: 1px solid #f0f0f0;
     position: relative;
+    min-height: 70px;
+}
+
+.wc-geo-popup-logo {
+    width: 40px;
+    height: 40px;
+    margin-right: 12px;
+    border-radius: 4px;
+    object-fit: contain;
 }
 
 .wc-geo-popup-flag {
     font-size: 32px;
     margin-right: 15px;
     line-height: 1;
+    display: flex;
+    align-items: center;
 }
 
 .wc-geo-popup-title {
@@ -48,6 +59,8 @@
     font-weight: 600;
     color: #2c3338;
     line-height: 1.4;
+    display: flex;
+    align-items: center;
 }
 
 /* Close button */

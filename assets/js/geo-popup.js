@@ -70,10 +70,17 @@
             overlayHtml = '<div class="wc-geo-popup-overlay" id="wc-geo-popup-overlay"></div>';
         }
 
+        // Create logo HTML if available
+        var logoHtml = '';
+        if (wc_geo_redirect.logo_url) {
+            logoHtml = '<img src="' + wc_geo_redirect.logo_url + '" alt="Logo" class="wc-geo-popup-logo" />';
+        }
+
         // Create popup HTML
         var popupHtml = overlayHtml +
             '<div class="wc-geo-popup-container" id="wc-geo-popup">' +
                 '<div class="wc-geo-popup-header">' +
+                    logoHtml +
                     '<span class="wc-geo-popup-flag">' + flag + '</span>' +
                     '<h3 class="wc-geo-popup-title">Visit ' + response.storeName + '</h3>' +
                     '<button class="wc-geo-popup-close" id="wc-geo-popup-close" aria-label="Close"></button>' +

@@ -126,6 +126,7 @@ class WC_Geo_Redirect {
         // Admin settings
         add_action('admin_menu', array($this, 'add_admin_menu'));
         add_action('admin_init', array($this, 'register_settings'));
+        add_action('admin_enqueue_scripts', array($this, 'admin_enqueue_scripts'));
         
         // Plugin activation/deactivation
         register_activation_hook(WC_GEO_REDIRECT_PLUGIN_FILE, array($this, 'activate'));
@@ -669,6 +670,64 @@ class WC_Geo_Redirect {
     }
 
     /**
+     * Enqueue admin scripts
+     *
+     * @since 1.0.0
+     */
+    public function admin_enqueue_scripts($hook) {
+        // Only enqueue on our settings page
+        if ('woocommerce_page_wc-geo-redirect' !== $hook) {
+            return;
+        }
+
+        // Enqueue media uploader
+        wp_enqueue_media();
+
+        // Add inline script for media uploader
+        wp_add_inline_script('jquery', '
+            jQuery(document).ready(function($){
+                var mediaUploader;
+
+                $("#upload_logo_button").click(function(e) {
+                    e.preventDefault();
+
+                    if (mediaUploader) {
+                        mediaUploader.open();
+                        return;
+                    }
+
+                    mediaUploader = wp.media.frames.file_frame = wp.media({
+                        title: "' . esc_js(__('Choose Logo', 'wc-geo-redirect')) . '",
+                        button: {
+                            text: "' . esc_js(__('Choose Logo', 'wc-geo-redirect')) . '"
+                        },
+                        multiple: false,
+                        library: {
+                            type: "image"
+                        }
+                    });
+
+                    mediaUploader.on("select", function() {
+                        var attachment = mediaUploader.state().get("selection").first().toJSON();
+                        $("#wc_geo_redirect_popup_logo").val(attachment.id);
+                        $("#logo-preview").attr("src", attachment.url).show();
+                        $("#remove_logo_button").show();
+                    });
+
+                    mediaUploader.open();
+                });
+
+                $("#remove_logo_button").click(function(e) {
+                    e.preventDefault();
+                    $("#wc_geo_redirect_popup_logo").val("");
+                    $("#logo-preview").hide();
+                    $(this).hide();
+                });
+            });
+        ');
+    }
+
+    /**
      * Enqueue scripts for popup mode
      *
      * @since 1.0.0
@@ -707,6 +766,10 @@ class WC_Geo_Redirect {
             true
         );
 
+        // Get logo URL if set
+        $logo_id = get_option('wc_geo_redirect_popup_logo', 0);
+        $logo_url = $logo_id ? wp_get_attachment_image_url($logo_id, 'thumbnail') : '';
+
         // Localize script with necessary data
         wp_localize_script('wc-geo-popup', 'wc_geo_redirect', array(
             'ajax_url' => admin_url('admin-ajax.php'),
@@ -714,7 +777,8 @@ class WC_Geo_Redirect {
             'cookie_name' => $this->cookie_name,
             'cookie_days' => $this->cookie_duration,
             'popup_delay' => get_option('wc_geo_redirect_popup_delay', 2) * 1000, // Convert to milliseconds
-            'debug_mode' => defined('WP_DEBUG') && WP_DEBUG
+            'debug_mode' => defined('WP_DEBUG') && WP_DEBUG,
+            'logo_url' => $logo_url
         ));
     }
 
@@ -899,6 +963,16 @@ class WC_Geo_Redirect {
                 'default' => __('It looks like you\'re visiting from Canada. Would you like to switch to our Canadian store for local currency and shipping?', 'wc-geo-redirect')
             )
         );
+
+        register_setting(
+            'wc_geo_redirect_settings',
+            'wc_geo_redirect_popup_logo',
+            array(
+                'type' => 'integer',
+                'sanitize_callback' => 'absint',
+                'default' => 0
+            )
+        );
     }
 
     /**
@@ -1051,6 +1125,25 @@ class WC_Geo_Redirect {
 
                 <h2><?php esc_html_e('Popup Settings', 'wc-geo-redirect'); ?></h2>
                 <table class="form-table" role="presentation">
+                    <tr>
+                        <th scope="row">
+                            <label for="wc_geo_redirect_popup_logo"><?php esc_html_e('Popup Logo', 'wc-geo-redirect'); ?></label>
+                        </th>
+                        <td>
+                            <?php
+                            $logo_id = get_option('wc_geo_redirect_popup_logo', 0);
+                            $logo_url = $logo_id ? wp_get_attachment_image_url($logo_id, 'thumbnail') : '';
+                            ?>
+                            <div style="margin-bottom: 10px;">
+                                <img id="logo-preview" src="<?php echo esc_url($logo_url); ?>" style="max-width: 100px; max-height: 100px; display: <?php echo $logo_url ? 'block' : 'none'; ?>; margin-bottom: 10px; border: 1px solid #ddd; padding: 5px; background: #fff;" />
+                            </div>
+                            <input type="hidden" id="wc_geo_redirect_popup_logo" name="wc_geo_redirect_popup_logo" value="<?php echo esc_attr($logo_id); ?>" />
+                            <button type="button" class="button" id="upload_logo_button"><?php esc_html_e('Upload Logo', 'wc-geo-redirect'); ?></button>
+                            <button type="button" class="button" id="remove_logo_button" style="display: <?php echo $logo_id ? 'inline-block' : 'none'; ?>;"><?php esc_html_e('Remove Logo', 'wc-geo-redirect'); ?></button>
+                            <p class="description"><?php esc_html_e('Square logo (recommended 80x80px) to display in the popup header', 'wc-geo-redirect'); ?></p>
+                        </td>
+                    </tr>
+
                     <tr>
                         <th scope="row">
                             <label for="wc_geo_redirect_popup_delay"><?php esc_html_e('Popup Delay', 'wc-geo-redirect'); ?></label>
