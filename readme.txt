@@ -272,7 +272,7 @@ We welcome contributions! Please visit our GitHub repository at [your-github-url
 
 ## Credits
 
-Developed by [Your Company Name]  
+Developed by maikunari  
 Special thanks to the WooCommerce team for their geolocation functionality.
 
 ## License
