@@ -105,13 +105,23 @@ class WC_Geo_Redirect {
         // Check WooCommerce dependency
         add_action('plugins_loaded', array($this, 'check_dependencies'));
         
-        // Frontend redirect logic - use template_redirect for better compatibility
+        // Frontend logic based on mode
         if (!is_admin() && !wp_doing_ajax() && !wp_doing_cron()) {
-            add_action('template_redirect', array($this, 'maybe_redirect'), 1);
+            $mode = get_option('wc_geo_redirect_mode', 'popup');
+            if ($mode === 'redirect') {
+                add_action('template_redirect', array($this, 'maybe_redirect'), 1);
+            }
         }
-        
+
         // Add store switcher
         add_action('wp_footer', array($this, 'render_store_switcher'));
+
+        // AJAX handlers
+        add_action('wp_ajax_wc_geo_check_location', array($this, 'ajax_check_location'));
+        add_action('wp_ajax_nopriv_wc_geo_check_location', array($this, 'ajax_check_location'));
+
+        // Enqueue scripts for popup mode
+        add_action('wp_enqueue_scripts', array($this, 'enqueue_scripts'));
         
         // Admin settings
         add_action('admin_menu', array($this, 'add_admin_menu'));
@@ -130,11 +140,33 @@ class WC_Geo_Redirect {
                 \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility('custom_order_tables', WC_GEO_REDIRECT_PLUGIN_FILE, true);
             }
         });
+
+        // Add allowed redirect hosts for cross-domain redirects
+        add_filter('allowed_redirect_hosts', array($this, 'add_allowed_redirect_hosts'));
     }
     
     /**
+     * Add allowed redirect hosts
+     *
+     * @since 1.0.0
+     * @param array $hosts Allowed hosts
+     * @return array
+     */
+    public function add_allowed_redirect_hosts($hosts) {
+        // Add both configured domains to allowed hosts
+        $hosts[] = $this->ca_domain;
+        $hosts[] = $this->us_domain;
+
+        // Also add www versions
+        $hosts[] = 'www.' . $this->ca_domain;
+        $hosts[] = 'www.' . $this->us_domain;
+
+        return $hosts;
+    }
+
+    /**
      * Check plugin dependencies
-     * 
+     *
      * @since 1.0.0
      */
     public function check_dependencies() {
@@ -251,17 +283,47 @@ class WC_Geo_Redirect {
         $current_host = sanitize_text_field($_SERVER['HTTP_HOST'] ?? '');
         $redirect_to = null;
         
-        // Check for domain match more precisely
-        $is_ca_site = ($current_host === $this->ca_domain || $current_host === 'www.' . $this->ca_domain);
-        $is_us_site = ($current_host === $this->us_domain || $current_host === 'www.' . $this->us_domain);
-        
-        if ('US' === $country && $is_ca_site) {
-            $redirect_to = $this->us_domain;
-        } elseif ('CA' === $country && $is_us_site) {
-            $redirect_to = $this->ca_domain;
+        // Extract just the domain part (without paths) for comparison
+        $current_host_clean = str_replace('www.', '', $current_host);
+
+        // Extract domain parts from configured domains (handle cases like "github.com/maikunari")
+        $ca_domain_parts = explode('/', str_replace('www.', '', $this->ca_domain));
+        $ca_domain_clean = $ca_domain_parts[0];
+
+        $us_domain_parts = explode('/', str_replace('www.', '', $this->us_domain));
+        $us_domain_clean = $us_domain_parts[0];
+
+        // Debug logging
+        if (WP_DEBUG && WP_DEBUG_LOG) {
+            error_log('WC Geo Redirect Debug: Current host = ' . $current_host);
+            error_log('WC Geo Redirect Debug: CA domain = ' . $this->ca_domain);
+            error_log('WC Geo Redirect Debug: US domain = ' . $this->us_domain);
+            error_log('WC Geo Redirect Debug: Country = ' . $country);
+            error_log('WC Geo Redirect Debug: Current host clean = ' . $current_host_clean);
+            error_log('WC Geo Redirect Debug: CA domain clean = ' . $ca_domain_clean);
+            error_log('WC Geo Redirect Debug: US domain clean = ' . $us_domain_clean);
         }
-        
-        if ($redirect_to && $redirect_to !== $current_host) {
+
+        // Determine which site we're on and where to redirect
+        $redirect_to = null;
+
+        // If we're on the CA domain and visitor is from US
+        if ($country === 'US' && $current_host_clean === $ca_domain_clean) {
+            $redirect_to = $this->us_domain;
+            if (WP_DEBUG && WP_DEBUG_LOG) {
+                error_log('WC Geo Redirect: US visitor on CA site, redirecting to: ' . $redirect_to);
+            }
+        }
+        // If we're on the US domain and visitor is from CA
+        elseif ($country === 'CA' && $current_host_clean === $us_domain_clean) {
+            $redirect_to = $this->ca_domain;
+            if (WP_DEBUG && WP_DEBUG_LOG) {
+                error_log('WC Geo Redirect: CA visitor on US site, redirecting to: ' . $redirect_to);
+            }
+        }
+
+        // Only redirect if we have a valid target
+        if ($redirect_to) {
             $this->perform_redirect($redirect_to);
         }
     }
@@ -273,13 +335,33 @@ class WC_Geo_Redirect {
      * @param string $domain Target domain
      */
     private function perform_redirect($domain) {
-        // Build redirect URL - maintain path and query string
-        // Don't use sanitize_text_field as it strips necessary characters from URLs
+        // Don't redirect to default placeholder domains
+        if ($domain === 'yourstore.com' || $domain === 'yourstore.ca' || empty($domain)) {
+            if (WP_DEBUG && WP_DEBUG_LOG) {
+                error_log('WC Geo Redirect: Skipping redirect - domain not configured: ' . $domain);
+            }
+            return;
+        }
+
+        // Clean up the domain - remove any paths if included
+        // This handles cases like "github.com/maikunari" -> "github.com"
+        $domain_parts = parse_url('http://' . $domain);
+        $clean_domain = $domain_parts['host'] ?? $domain;
+
+        // For domains with paths (like github.com/maikunari), keep the full path
+        $domain_path = '';
+        if (strpos($domain, '/') !== false) {
+            $parts = explode('/', $domain, 2);
+            $clean_domain = $parts[0];
+            $domain_path = '/' . $parts[1];
+        }
+
+        // Build redirect URL
         $request_uri = $_SERVER['REQUEST_URI'] ?? '/';
 
         // Parse the URL to properly add geo_redirected parameter
         $parsed_url = parse_url($request_uri);
-        $path = $parsed_url['path'] ?? '/';
+        $path = $domain_path . ($parsed_url['path'] ?? '/');
         $query = $parsed_url['query'] ?? '';
 
         // Add geo_redirected parameter to prevent loops
@@ -290,20 +372,18 @@ class WC_Geo_Redirect {
         }
 
         // Build the complete redirect URL
-        $redirect_url = 'https://' . $domain . $path . '?' . $query;
-
-        // Validate URL
-        if (!wp_http_validate_url($redirect_url)) {
-            return;
+        $redirect_url = 'https://' . $clean_domain . $path;
+        if (!empty($query)) {
+            $redirect_url .= '?' . $query;
         }
 
         // Log redirect for debugging
         if (WP_DEBUG && WP_DEBUG_LOG) {
-            error_log('WC Geo Redirect: Redirecting to ' . $redirect_url);
+            error_log('WC Geo Redirect: Redirecting from ' . $_SERVER['HTTP_HOST'] . $request_uri . ' to ' . $redirect_url);
         }
 
-        // Use WordPress safe redirect with 302 (temporary)
-        wp_safe_redirect($redirect_url, 302);
+        // Use wp_redirect for cross-domain redirects (not wp_safe_redirect which blocks external domains)
+        wp_redirect($redirect_url, 302);
         exit;
     }
     
@@ -368,6 +448,128 @@ class WC_Geo_Redirect {
         return null;
     }
     
+    /**
+     * AJAX handler for checking user location
+     *
+     * @since 1.0.0
+     */
+    public function ajax_check_location() {
+        // Check nonce for security
+        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'wc_geo_redirect_ajax')) {
+            wp_die('Security check failed');
+        }
+
+        // Check if plugin is enabled
+        if (!get_option('wc_geo_redirect_enabled', true)) {
+            wp_send_json(array(
+                'shouldSuggest' => false,
+                'reason' => 'plugin_disabled'
+            ));
+        }
+
+        // Check if user has manually chosen a store
+        if (isset($_COOKIE[$this->cookie_name])) {
+            wp_send_json(array(
+                'shouldSuggest' => false,
+                'reason' => 'manual_choice'
+            ));
+        }
+
+        // Skip for bots
+        if ($this->is_bot()) {
+            wp_send_json(array(
+                'shouldSuggest' => false,
+                'reason' => 'bot_detected'
+            ));
+        }
+
+        // Get visitor country
+        $country = $this->get_visitor_country();
+        if (empty($country)) {
+            wp_send_json(array(
+                'shouldSuggest' => false,
+                'reason' => 'no_country_detected'
+            ));
+        }
+
+        // Get current host
+        $current_host = sanitize_text_field($_SERVER['HTTP_HOST'] ?? '');
+        $current_host_clean = str_replace('www.', '', $current_host);
+
+        // Extract domain parts from configured domains
+        $ca_domain_parts = explode('/', str_replace('www.', '', $this->ca_domain));
+        $ca_domain_clean = $ca_domain_parts[0];
+
+        $us_domain_parts = explode('/', str_replace('www.', '', $this->us_domain));
+        $us_domain_clean = $us_domain_parts[0];
+
+        // Check if redirect is needed
+        $shouldSuggest = false;
+        $redirectUrl = '';
+        $message = '';
+        $storeName = '';
+
+        if ($country === 'US' && $current_host_clean === $ca_domain_clean) {
+            $shouldSuggest = true;
+            $redirectUrl = 'https://' . $this->us_domain;
+            $message = __('It looks like you\'re visiting from the United States. Would you like to switch to our US store for local currency and shipping?', 'wc-geo-redirect');
+            $storeName = __('US Store', 'wc-geo-redirect');
+        } elseif ($country === 'CA' && $current_host_clean === $us_domain_clean) {
+            $shouldSuggest = true;
+            $redirectUrl = 'https://' . $this->ca_domain;
+            $message = __('It looks like you\'re visiting from Canada. Would you like to switch to our Canadian store for local currency and shipping?', 'wc-geo-redirect');
+            $storeName = __('Canadian Store', 'wc-geo-redirect');
+        }
+
+        wp_send_json(array(
+            'shouldSuggest' => $shouldSuggest,
+            'redirectUrl' => $redirectUrl,
+            'message' => $message,
+            'country' => $country,
+            'storeName' => $storeName
+        ));
+    }
+
+    /**
+     * Enqueue scripts for popup mode
+     *
+     * @since 1.0.0
+     */
+    public function enqueue_scripts() {
+        // Check if plugin is enabled
+        if (!get_option('wc_geo_redirect_enabled', true)) {
+            return;
+        }
+
+        // Only enqueue if popup mode is enabled
+        $mode = get_option('wc_geo_redirect_mode', 'popup');
+        if ($mode !== 'popup') {
+            return;
+        }
+
+        // Don't enqueue on admin pages
+        if (is_admin()) {
+            return;
+        }
+
+        // Register and enqueue the script
+        wp_enqueue_script(
+            'wc-geo-popup',
+            WC_GEO_REDIRECT_PLUGIN_URL . 'assets/js/geo-popup.js',
+            array('jquery'),
+            WC_GEO_REDIRECT_VERSION,
+            true
+        );
+
+        // Localize script with necessary data
+        wp_localize_script('wc-geo-popup', 'wc_geo_redirect', array(
+            'ajax_url' => admin_url('admin-ajax.php'),
+            'nonce' => wp_create_nonce('wc_geo_redirect_ajax'),
+            'cookie_name' => $this->cookie_name,
+            'cookie_days' => $this->cookie_duration
+        ));
+    }
+
     /**
      * Check if user agent is a bot
      * 
@@ -476,7 +678,7 @@ class WC_Geo_Redirect {
     
     /**
      * Register settings
-     * 
+     *
      * @since 1.0.0
      */
     public function register_settings() {
@@ -485,21 +687,21 @@ class WC_Geo_Redirect {
             'wc_geo_redirect_ca_domain',
             array(
                 'type' => 'string',
-                'sanitize_callback' => 'sanitize_text_field',
+                'sanitize_callback' => array($this, 'sanitize_domain'),
                 'default' => 'yourstore.ca'
             )
         );
-        
+
         register_setting(
             'wc_geo_redirect_settings',
             'wc_geo_redirect_us_domain',
             array(
                 'type' => 'string',
-                'sanitize_callback' => 'sanitize_text_field',
+                'sanitize_callback' => array($this, 'sanitize_domain'),
                 'default' => 'yourstore.com'
             )
         );
-        
+
         register_setting(
             'wc_geo_redirect_settings',
             'wc_geo_redirect_enabled',
@@ -509,8 +711,71 @@ class WC_Geo_Redirect {
                 'default' => true
             )
         );
+
+        register_setting(
+            'wc_geo_redirect_settings',
+            'wc_geo_redirect_mode',
+            array(
+                'type' => 'string',
+                'sanitize_callback' => array($this, 'sanitize_mode'),
+                'default' => 'popup'
+            )
+        );
     }
-    
+
+    /**
+     * Sanitize domain input
+     *
+     * @since 1.0.0
+     * @param string $domain
+     * @return string
+     */
+    public function sanitize_domain($domain) {
+        // Remove https://, http://, and trailing slashes
+        $domain = preg_replace('#^https?://#', '', $domain);
+        $domain = rtrim($domain, '/');
+        $domain = sanitize_text_field($domain);
+
+        // Check if both domains are the same
+        $ca_domain = get_option('wc_geo_redirect_ca_domain');
+        $us_domain = get_option('wc_geo_redirect_us_domain');
+
+        // If saving CA domain and it matches US domain
+        if (isset($_POST['wc_geo_redirect_ca_domain']) && $domain === $us_domain) {
+            add_settings_error(
+                'wc_geo_redirect_messages',
+                'wc_geo_redirect_same_domain',
+                __('Error: Canadian and US domains cannot be the same. Please use different domains for each region.', 'wc-geo-redirect'),
+                'error'
+            );
+            return $ca_domain; // Return old value
+        }
+
+        // If saving US domain and it matches CA domain
+        if (isset($_POST['wc_geo_redirect_us_domain']) && $domain === $ca_domain) {
+            add_settings_error(
+                'wc_geo_redirect_messages',
+                'wc_geo_redirect_same_domain',
+                __('Error: US and Canadian domains cannot be the same. Please use different domains for each region.', 'wc-geo-redirect'),
+                'error'
+            );
+            return $us_domain; // Return old value
+        }
+
+        return $domain;
+    }
+
+    /**
+     * Sanitize redirect mode
+     *
+     * @since 1.0.0
+     * @param string $mode
+     * @return string
+     */
+    public function sanitize_mode($mode) {
+        return in_array($mode, array('popup', 'redirect')) ? $mode : 'popup';
+    }
+
     /**
      * Render admin settings page
      * 
@@ -546,6 +811,32 @@ class WC_Geo_Redirect {
                         <td>
                             <input type="checkbox" id="wc_geo_redirect_enabled" name="wc_geo_redirect_enabled" value="1" <?php checked(get_option('wc_geo_redirect_enabled', true)); ?> />
                             <p class="description"><?php esc_html_e('Enable or disable automatic geo-redirection.', 'wc-geo-redirect'); ?></p>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th scope="row">
+                            <?php esc_html_e('Redirect Mode', 'wc-geo-redirect'); ?>
+                        </th>
+                        <td>
+                            <?php $mode = get_option('wc_geo_redirect_mode', 'popup'); ?>
+                            <fieldset>
+                                <label>
+                                    <input type="radio" name="wc_geo_redirect_mode" value="popup" <?php checked($mode, 'popup'); ?> />
+                                    <span><?php esc_html_e('Popup Mode', 'wc-geo-redirect'); ?></span>
+                                </label>
+                                <p class="description" style="margin-left: 24px; margin-top: 5px;">
+                                    <?php esc_html_e('Shows a suggestion popup to visitors (works with page caching)', 'wc-geo-redirect'); ?>
+                                </p>
+                                <br>
+                                <label>
+                                    <input type="radio" name="wc_geo_redirect_mode" value="redirect" <?php checked($mode, 'redirect'); ?> />
+                                    <span><?php esc_html_e('Redirect Mode', 'wc-geo-redirect'); ?></span>
+                                </label>
+                                <p class="description" style="margin-left: 24px; margin-top: 5px;">
+                                    <?php esc_html_e('Automatically redirects visitors (may not work with page caching)', 'wc-geo-redirect'); ?>
+                                </p>
+                            </fieldset>
                         </td>
                     </tr>
                     
@@ -594,6 +885,42 @@ class WC_Geo_Redirect {
                     }
                     ?>
                 </p>
+
+                <h3><?php esc_html_e('Current Configuration', 'wc-geo-redirect'); ?></h3>
+                <table class="widefat">
+                    <tr>
+                        <td><strong><?php esc_html_e('Plugin Status:', 'wc-geo-redirect'); ?></strong></td>
+                        <td><?php echo get_option('wc_geo_redirect_enabled', true) ? '<span style="color: green;">✓ Enabled</span>' : '<span style="color: red;">✗ Disabled</span>'; ?></td>
+                    </tr>
+                    <tr>
+                        <td><strong><?php esc_html_e('Mode:', 'wc-geo-redirect'); ?></strong></td>
+                        <td><?php
+                            $mode = get_option('wc_geo_redirect_mode', 'popup');
+                            echo $mode === 'popup' ? esc_html__('Popup Mode', 'wc-geo-redirect') : esc_html__('Redirect Mode', 'wc-geo-redirect');
+                        ?></td>
+                    </tr>
+                    <tr>
+                        <td><strong><?php esc_html_e('Canadian Domain:', 'wc-geo-redirect'); ?></strong></td>
+                        <td><?php echo esc_html($this->ca_domain); ?></td>
+                    </tr>
+                    <tr>
+                        <td><strong><?php esc_html_e('US Domain:', 'wc-geo-redirect'); ?></strong></td>
+                        <td><?php echo esc_html($this->us_domain); ?></td>
+                    </tr>
+                    <tr>
+                        <td><strong><?php esc_html_e('Current Site:', 'wc-geo-redirect'); ?></strong></td>
+                        <td><?php echo esc_html($_SERVER['HTTP_HOST']); ?></td>
+                    </tr>
+                </table>
+
+                <?php if (WP_DEBUG): ?>
+                <h3><?php esc_html_e('Debug Mode', 'wc-geo-redirect'); ?></h3>
+                <p><?php esc_html_e('Debug mode is enabled. You can test redirects using:', 'wc-geo-redirect'); ?></p>
+                <ul style="list-style-type: disc; margin-left: 20px;">
+                    <li><code><?php echo esc_html(home_url('/?test_country=US')); ?></code> - <?php esc_html_e('Test as US visitor', 'wc-geo-redirect'); ?></li>
+                    <li><code><?php echo esc_html(home_url('/?test_country=CA')); ?></code> - <?php esc_html_e('Test as Canadian visitor', 'wc-geo-redirect'); ?></li>
+                </ul>
+                <?php endif; ?>
             </div>
         </div>
         <?php
