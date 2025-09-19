@@ -198,26 +198,17 @@ class WC_Geo_Redirect {
         // Get request URI once
         $request_uri = $_SERVER['REQUEST_URI'] ?? '';
 
-        // Skip if user is logged in
-        if (is_user_logged_in()) {
-            return;
-        }
-
-        // Check if on login/registration pages
-        $login_url = wp_login_url();
-        $register_url = wp_registration_url();
-        $current_url = ( is_ssl() ? 'https://' : 'http://' ) . $_SERVER['HTTP_HOST'] . $request_uri;
-
-        if (strpos($current_url, $login_url) !== false || strpos($current_url, $register_url) !== false) {
-            return;
-        }
-
         // Skip wp-admin, wp-login.php, and system files
-        $skip_paths = array('/wp-admin', '/wp-login.php', '/wp-cron.php', '/xmlrpc.php', '/wp-json');
+        $skip_paths = array('/wp-admin', '/wp-login.php', '/wp-cron.php', '/xmlrpc.php', '/wp-json', '/wp-includes', '/wp-content/uploads');
         foreach ($skip_paths as $path) {
             if (strpos($request_uri, $path) !== false) {
                 return;
             }
+        }
+
+        // Skip if user is logged in (check after path exclusions to avoid issues)
+        if (is_user_logged_in()) {
+            return;
         }
         
         // Skip if already redirected (prevent loops)
@@ -277,28 +268,40 @@ class WC_Geo_Redirect {
     
     /**
      * Perform the redirect
-     * 
+     *
      * @since 1.0.0
      * @param string $domain Target domain
      */
     private function perform_redirect($domain) {
         // Build redirect URL - maintain path and query string
-        $request_uri = sanitize_text_field($_SERVER['REQUEST_URI'] ?? '/');
-        
+        // Don't use sanitize_text_field as it strips necessary characters from URLs
+        $request_uri = $_SERVER['REQUEST_URI'] ?? '/';
+
+        // Parse the URL to properly add geo_redirected parameter
+        $parsed_url = parse_url($request_uri);
+        $path = $parsed_url['path'] ?? '/';
+        $query = $parsed_url['query'] ?? '';
+
         // Add geo_redirected parameter to prevent loops
-        $separator = (strpos($request_uri, '?') !== false) ? '&' : '?';
-        $redirect_url = 'https://' . $domain . $request_uri . $separator . 'geo_redirected=1';
-        
+        if (!empty($query)) {
+            $query .= '&geo_redirected=1';
+        } else {
+            $query = 'geo_redirected=1';
+        }
+
+        // Build the complete redirect URL
+        $redirect_url = 'https://' . $domain . $path . '?' . $query;
+
         // Validate URL
         if (!wp_http_validate_url($redirect_url)) {
             return;
         }
-        
+
         // Log redirect for debugging
         if (WP_DEBUG && WP_DEBUG_LOG) {
             error_log('WC Geo Redirect: Redirecting to ' . $redirect_url);
         }
-        
+
         // Use WordPress safe redirect with 302 (temporary)
         wp_safe_redirect($redirect_url, 302);
         exit;
