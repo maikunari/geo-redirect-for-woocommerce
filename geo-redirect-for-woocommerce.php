@@ -22,7 +22,7 @@
 defined('ABSPATH') || exit;
 
 // Define plugin constants
-define('WC_GEO_REDIRECT_VERSION', '1.0.0');
+define('WC_GEO_REDIRECT_VERSION', '1.0.1');
 define('WC_GEO_REDIRECT_PLUGIN_FILE', __FILE__);
 define('WC_GEO_REDIRECT_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('WC_GEO_REDIRECT_PLUGIN_URL', plugin_dir_url(__FILE__));
@@ -767,8 +767,20 @@ class WC_Geo_Redirect {
         );
 
         // Get logo URL if set
-        $logo_id = get_option('wc_geo_redirect_popup_logo', 0);
-        $logo_url = $logo_id ? wp_get_attachment_image_url($logo_id, 'thumbnail') : '';
+        $logo_id = get_option('wc_geo_redirect_popup_logo', '');
+        $logo_url = '';
+
+        // Handle both integer and string IDs
+        if (!empty($logo_id)) {
+            $logo_id = intval($logo_id);
+            if ($logo_id > 0) {
+                $logo_url = wp_get_attachment_image_url($logo_id, 'thumbnail');
+                if (!$logo_url) {
+                    // Try full size if thumbnail doesn't exist
+                    $logo_url = wp_get_attachment_image_url($logo_id, 'full');
+                }
+            }
+        }
 
         // Localize script with necessary data
         wp_localize_script('wc-geo-popup', 'wc_geo_redirect', array(
@@ -778,7 +790,8 @@ class WC_Geo_Redirect {
             'cookie_days' => $this->cookie_duration,
             'popup_delay' => get_option('wc_geo_redirect_popup_delay', 2) * 1000, // Convert to milliseconds
             'debug_mode' => defined('WP_DEBUG') && WP_DEBUG,
-            'logo_url' => $logo_url
+            'logo_url' => $logo_url ? $logo_url : '',
+            'logo_id' => $logo_id // Add for debugging
         ));
     }
 
@@ -969,7 +982,13 @@ class WC_Geo_Redirect {
             'wc_geo_redirect_popup_logo',
             array(
                 'type' => 'integer',
-                'sanitize_callback' => 'absint',
+                'sanitize_callback' => function($value) {
+                    // Handle empty strings and convert to integer
+                    if (empty($value)) {
+                        return 0;
+                    }
+                    return absint($value);
+                },
                 'default' => 0
             )
         );
@@ -1131,15 +1150,27 @@ class WC_Geo_Redirect {
                         </th>
                         <td>
                             <?php
-                            $logo_id = get_option('wc_geo_redirect_popup_logo', 0);
-                            $logo_url = $logo_id ? wp_get_attachment_image_url($logo_id, 'thumbnail') : '';
+                            $logo_id = get_option('wc_geo_redirect_popup_logo', '');
+                            $logo_url = '';
+
+                            // Handle both integer and string IDs
+                            if (!empty($logo_id)) {
+                                $logo_id = intval($logo_id);
+                                if ($logo_id > 0) {
+                                    $logo_url = wp_get_attachment_image_url($logo_id, 'thumbnail');
+                                    if (!$logo_url) {
+                                        // Try full size if thumbnail doesn't exist
+                                        $logo_url = wp_get_attachment_image_url($logo_id, 'full');
+                                    }
+                                }
+                            }
                             ?>
                             <div style="margin-bottom: 10px;">
                                 <img id="logo-preview" src="<?php echo esc_url($logo_url); ?>" style="max-width: 100px; max-height: 100px; display: <?php echo $logo_url ? 'block' : 'none'; ?>; margin-bottom: 10px; border: 1px solid #ddd; padding: 5px; background: #fff;" />
                             </div>
                             <input type="hidden" id="wc_geo_redirect_popup_logo" name="wc_geo_redirect_popup_logo" value="<?php echo esc_attr($logo_id); ?>" />
                             <button type="button" class="button" id="upload_logo_button"><?php esc_html_e('Upload Logo', 'wc-geo-redirect'); ?></button>
-                            <button type="button" class="button" id="remove_logo_button" style="display: <?php echo $logo_id ? 'inline-block' : 'none'; ?>;"><?php esc_html_e('Remove Logo', 'wc-geo-redirect'); ?></button>
+                            <button type="button" class="button" id="remove_logo_button" style="display: <?php echo $logo_id > 0 ? 'inline-block' : 'none'; ?>;"><?php esc_html_e('Remove Logo', 'wc-geo-redirect'); ?></button>
                             <p class="description"><?php esc_html_e('Square logo (recommended 80x80px) to display in the popup header', 'wc-geo-redirect'); ?></p>
                         </td>
                     </tr>

@@ -72,17 +72,25 @@
 
         // Create logo HTML if available
         var logoHtml = '';
-        if (wc_geo_redirect.logo_url) {
+        if (wc_geo_redirect.logo_url && wc_geo_redirect.logo_url !== '') {
             logoHtml = '<img src="' + wc_geo_redirect.logo_url + '" alt="Logo" class="wc-geo-popup-logo" />';
+            console.log('Logo URL:', wc_geo_redirect.logo_url);
+            console.log('Logo ID:', wc_geo_redirect.logo_id);
+        } else {
+            console.log('No logo URL available');
+            console.log('Logo ID:', wc_geo_redirect.logo_id);
+            console.log('Full wc_geo_redirect object:', wc_geo_redirect);
         }
 
-        // Create popup HTML
+        // Create popup HTML with proper structure for alignment
         var popupHtml = overlayHtml +
             '<div class="wc-geo-popup-container" id="wc-geo-popup">' +
                 '<div class="wc-geo-popup-header">' +
-                    logoHtml +
-                    '<span class="wc-geo-popup-flag">' + flag + '</span>' +
-                    '<h3 class="wc-geo-popup-title">Visit ' + response.storeName + '</h3>' +
+                    '<div class="wc-geo-popup-header-content">' +
+                        logoHtml +
+                        '<span class="wc-geo-popup-flag">' + flag + '</span>' +
+                        '<h3 class="wc-geo-popup-title">Visit ' + response.storeName + '</h3>' +
+                    '</div>' +
                     '<button class="wc-geo-popup-close" id="wc-geo-popup-close" aria-label="Close"></button>' +
                 '</div>' +
                 '<div class="wc-geo-popup-content">' +
