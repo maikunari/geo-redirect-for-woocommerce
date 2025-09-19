@@ -140,12 +140,19 @@
         // Check for test mode in URL
         var urlParams = new URLSearchParams(window.location.search);
         var testMode = urlParams.get('test_popup') === '1';
+        var testCountry = urlParams.get('test_country');
+
+        // If test_country is present, enable test mode
+        if (testCountry) {
+            testMode = true;
+        }
 
         // Debug logging
         if (wc_geo_redirect.debug_mode || testMode) {
             console.log('WC Geo Redirect: Starting location check...');
             console.log('Debug mode:', wc_geo_redirect.debug_mode);
             console.log('Test mode:', testMode);
+            console.log('Test country:', testCountry);
             console.log('Popup delay:', wc_geo_redirect.popup_delay + 'ms');
         }
 
@@ -163,14 +170,21 @@
         }
 
         // Make AJAX call to check location
+        var ajaxData = {
+            action: 'wc_geo_check_location',
+            nonce: wc_geo_redirect.nonce,
+            test_popup: testMode ? '1' : '0'
+        };
+
+        // Add test country if present
+        if (testCountry) {
+            ajaxData.test_country = testCountry;
+        }
+
         $.ajax({
             url: wc_geo_redirect.ajax_url,
             type: 'POST',
-            data: {
-                action: 'wc_geo_check_location',
-                nonce: wc_geo_redirect.nonce,
-                test_popup: testMode ? '1' : '0'
-            },
+            data: ajaxData,
             success: function(response) {
                 if (wc_geo_redirect.debug_mode || testMode) {
                     console.log('WC Geo Redirect Response:', response);

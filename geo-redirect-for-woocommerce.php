@@ -106,8 +106,8 @@ class WC_Geo_Redirect {
         add_action('plugins_loaded', array($this, 'check_dependencies'));
         
         // Frontend logic based on mode
+        $mode = get_option('wc_geo_redirect_mode', 'popup');
         if (!is_admin() && !wp_doing_ajax() && !wp_doing_cron()) {
-            $mode = get_option('wc_geo_redirect_mode', 'popup');
             if ($mode === 'redirect') {
                 add_action('template_redirect', array($this, 'maybe_redirect'), 1);
             }
@@ -480,6 +480,11 @@ class WC_Geo_Redirect {
             return sanitize_text_field($_GET['test_country']);
         }
 
+        // Also check POST for AJAX requests
+        if (WP_DEBUG && isset($_POST['test_country'])) {
+            return sanitize_text_field($_POST['test_country']);
+        }
+
         // Check transient cache for IP-based country
         $ip_address = $this->get_client_ip();
         $cache_key = 'wc_geo_country_' . md5($ip_address);
@@ -549,27 +554,34 @@ class WC_Geo_Redirect {
             ));
         }
 
-        // Check if user has manually chosen a store
-        if (isset($_COOKIE[$this->cookie_name])) {
+        // Check for test mode first
+        $test_popup = isset($_POST['test_popup']) && $_POST['test_popup'] === '1';
+        $test_country = isset($_POST['test_country']) ? sanitize_text_field($_POST['test_country']) : '';
+
+        // Skip cookie check if in test mode
+        if (!$test_popup && !$test_country && isset($_COOKIE[$this->cookie_name])) {
             wp_send_json(array(
                 'shouldSuggest' => false,
                 'reason' => 'manual_choice'
             ));
         }
 
-        // Skip for bots
-        if ($this->is_bot()) {
+        // Skip for bots (but not in test mode)
+        if (!$test_popup && !$test_country && $this->is_bot()) {
             wp_send_json(array(
                 'shouldSuggest' => false,
                 'reason' => 'bot_detected'
             ));
         }
 
-        // Check for test mode
-        $test_popup = isset($_POST['test_popup']) && $_POST['test_popup'] === '1';
-
         // Get visitor country
         $country = $this->get_visitor_country();
+
+        // Override with test country if provided
+        if (!empty($test_country) && in_array($test_country, array('US', 'CA'))) {
+            $country = $test_country;
+            $test_popup = true; // Enable test mode when test_country is used
+        }
 
         // Allow testing without country detection
         if (!$test_popup && empty($country)) {
@@ -579,7 +591,7 @@ class WC_Geo_Redirect {
             ));
         }
 
-        // Use US as default for testing
+        // Use US as default for testing only if no country detected
         if ($test_popup && empty($country)) {
             $country = 'US';
         }
@@ -601,25 +613,59 @@ class WC_Geo_Redirect {
         $message = '';
         $storeName = '';
 
-        if ($country === 'US' && ($current_host_clean === $ca_domain_clean || $test_popup)) {
-            $shouldSuggest = true;
-            $redirectUrl = 'https://' . $this->us_domain;
-            $message = get_option('wc_geo_redirect_message_us', __('It looks like you\'re visiting from the United States. Would you like to switch to our US store for local currency and shipping?', 'wc-geo-redirect'));
-            $storeName = __('US Store', 'wc-geo-redirect');
-        } elseif ($country === 'CA' && $current_host_clean === $us_domain_clean) {
-            $shouldSuggest = true;
-            $redirectUrl = 'https://' . $this->ca_domain;
-            $message = get_option('wc_geo_redirect_message_ca', __('It looks like you\'re visiting from Canada. Would you like to switch to our Canadian store for local currency and shipping?', 'wc-geo-redirect'));
-            $storeName = __('Canadian Store', 'wc-geo-redirect');
+        // For testing, always show popup if test_popup is true
+        if ($test_popup) {
+            // Determine which popup to show based on country
+            if ($country === 'US') {
+                $shouldSuggest = true;
+                $redirectUrl = 'https://' . $this->us_domain;
+                $message = get_option('wc_geo_redirect_message_us', __('It looks like you\'re visiting from the United States. Would you like to switch to our US store for local currency and shipping?', 'wc-geo-redirect'));
+                $storeName = __('US Store', 'wc-geo-redirect');
+            } elseif ($country === 'CA') {
+                $shouldSuggest = true;
+                $redirectUrl = 'https://' . $this->ca_domain;
+                $message = get_option('wc_geo_redirect_message_ca', __('It looks like you\'re visiting from Canada. Would you like to switch to our Canadian store for local currency and shipping?', 'wc-geo-redirect'));
+                $storeName = __('Canadian Store', 'wc-geo-redirect');
+            }
+        } else {
+            // Normal operation - check if redirect is needed
+            if ($country === 'US' && $current_host_clean === $ca_domain_clean) {
+                $shouldSuggest = true;
+                $redirectUrl = 'https://' . $this->us_domain;
+                $message = get_option('wc_geo_redirect_message_us', __('It looks like you\'re visiting from the United States. Would you like to switch to our US store for local currency and shipping?', 'wc-geo-redirect'));
+                $storeName = __('US Store', 'wc-geo-redirect');
+            } elseif ($country === 'CA' && $current_host_clean === $us_domain_clean) {
+                $shouldSuggest = true;
+                $redirectUrl = 'https://' . $this->ca_domain;
+                $message = get_option('wc_geo_redirect_message_ca', __('It looks like you\'re visiting from Canada. Would you like to switch to our Canadian store for local currency and shipping?', 'wc-geo-redirect'));
+                $storeName = __('Canadian Store', 'wc-geo-redirect');
+            }
         }
 
-        wp_send_json(array(
+        $response = array(
             'shouldSuggest' => $shouldSuggest,
             'redirectUrl' => $redirectUrl,
             'message' => $message,
             'country' => $country,
             'storeName' => $storeName
-        ));
+        );
+
+        // Add debug info if in test mode
+        if ($test_popup || WP_DEBUG) {
+            $response['debug'] = array(
+                'test_popup' => $test_popup,
+                'test_country' => $test_country,
+                'detected_country' => $country,
+                'current_host' => $current_host,
+                'ca_domain' => $this->ca_domain,
+                'us_domain' => $this->us_domain,
+                'current_host_clean' => $current_host_clean,
+                'ca_domain_clean' => $ca_domain_clean,
+                'us_domain_clean' => $us_domain_clean
+            );
+        }
+
+        wp_send_json($response);
     }
 
     /**
