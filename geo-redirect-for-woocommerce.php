@@ -835,7 +835,7 @@ class WC_Geo_Redirect {
             'wc_geo_redirect_ca_domain',
             array(
                 'type' => 'string',
-                'sanitize_callback' => array($this, 'sanitize_domain'),
+                'sanitize_callback' => array($this, 'sanitize_ca_domain'),
                 'default' => 'yourstore.ca'
             )
         );
@@ -845,7 +845,7 @@ class WC_Geo_Redirect {
             'wc_geo_redirect_us_domain',
             array(
                 'type' => 'string',
-                'sanitize_callback' => array($this, 'sanitize_domain'),
+                'sanitize_callback' => array($this, 'sanitize_us_domain'),
                 'default' => 'yourstore.com'
             )
         );
@@ -902,42 +902,52 @@ class WC_Geo_Redirect {
     }
 
     /**
-     * Sanitize domain input
+     * Sanitize Canadian domain input
      *
      * @since 1.0.0
      * @param string $domain
      * @return string
      */
-    public function sanitize_domain($domain) {
+    public function sanitize_ca_domain($domain) {
         // Remove https://, http://, and trailing slashes
         $domain = preg_replace('#^https?://#', '', $domain);
         $domain = rtrim($domain, '/');
         $domain = sanitize_text_field($domain);
 
-        // Check if both domains are the same
-        $ca_domain = get_option('wc_geo_redirect_ca_domain');
-        $us_domain = get_option('wc_geo_redirect_us_domain');
+        return $domain;
+    }
 
-        // If saving CA domain and it matches US domain
-        if (isset($_POST['wc_geo_redirect_ca_domain']) && $domain === $us_domain) {
-            add_settings_error(
-                'wc_geo_redirect_messages',
-                'wc_geo_redirect_same_domain',
-                __('Error: Canadian and US domains cannot be the same. Please use different domains for each region.', 'wc-geo-redirect'),
-                'error'
-            );
-            return $ca_domain; // Return old value
-        }
+    /**
+     * Sanitize US domain input
+     *
+     * @since 1.0.0
+     * @param string $domain
+     * @return string
+     */
+    public function sanitize_us_domain($domain) {
+        // Remove https://, http://, and trailing slashes
+        $domain = preg_replace('#^https?://#', '', $domain);
+        $domain = rtrim($domain, '/');
+        $domain = sanitize_text_field($domain);
 
-        // If saving US domain and it matches CA domain
-        if (isset($_POST['wc_geo_redirect_us_domain']) && $domain === $ca_domain) {
-            add_settings_error(
-                'wc_geo_redirect_messages',
-                'wc_geo_redirect_same_domain',
-                __('Error: US and Canadian domains cannot be the same. Please use different domains for each region.', 'wc-geo-redirect'),
-                'error'
-            );
-            return $us_domain; // Return old value
+        // Check if both domains are the same after both are submitted
+        if (isset($_POST['wc_geo_redirect_ca_domain'])) {
+            $ca_domain = sanitize_text_field($_POST['wc_geo_redirect_ca_domain']);
+            $ca_domain = preg_replace('#^https?://#', '', $ca_domain);
+            $ca_domain = rtrim($ca_domain, '/');
+
+            // Extract base domains for comparison
+            $ca_base = explode('/', $ca_domain)[0];
+            $us_base = explode('/', $domain)[0];
+
+            if ($ca_base === $us_base && $ca_domain === $domain) {
+                add_settings_error(
+                    'wc_geo_redirect_messages',
+                    'wc_geo_redirect_same_domain',
+                    __('Warning: Canadian and US domains are the same. This may cause redirect loops.', 'wc-geo-redirect'),
+                    'warning'
+                );
+            }
         }
 
         return $domain;

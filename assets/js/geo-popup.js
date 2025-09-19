@@ -48,6 +48,8 @@
      * Create and show the popup
      */
     function showPopup(response) {
+        console.log('Showing popup with response:', response);
+
         // Get country flag
         var flag = response.country === 'US' ? '🇺🇸' : '🇨🇦';
 
@@ -93,17 +95,33 @@
         // Add popup to body
         $('body').append(popupHtml);
 
+        // Unbind any existing handlers first
+        $(document).off('click', '#wc-geo-popup-accept');
+        $(document).off('click', '#wc-geo-popup-decline, #wc-geo-popup-close, #wc-geo-popup-overlay');
+
         // Handle accept button
-        $('#wc-geo-popup-accept').on('click', function() {
+        $(document).on('click', '#wc-geo-popup-accept', function(e) {
+            e.preventDefault();
+
+            console.log('Accept button clicked, redirecting to:', response.redirectUrl);
+
             // Set cookie to remember choice
             setCookie(wc_geo_redirect.cookie_name, 'accepted', wc_geo_redirect.cookie_days);
 
             // Redirect to the suggested store
-            window.location.href = response.redirectUrl;
+            if (response.redirectUrl) {
+                window.location.href = response.redirectUrl;
+            } else {
+                console.error('No redirect URL provided');
+            }
         });
 
         // Handle decline button and close button
-        $('#wc-geo-popup-decline, #wc-geo-popup-close, #wc-geo-popup-overlay').on('click', function() {
+        $(document).on('click', '#wc-geo-popup-decline, #wc-geo-popup-close, #wc-geo-popup-overlay', function(e) {
+            e.preventDefault();
+
+            console.log('Decline/close button clicked');
+
             // Set cookie to remember choice
             setCookie(wc_geo_redirect.cookie_name, 'declined', wc_geo_redirect.cookie_days);
 
