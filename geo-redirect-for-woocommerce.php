@@ -195,13 +195,24 @@ class WC_Geo_Redirect {
             return;
         }
         
-        // Skip login/register/password reset pages
-        if (is_user_logged_in() || is_login() || is_register() || wp_login_url() === ( $_SERVER['REQUEST_URI'] ?? '' )) {
+        // Get request URI once
+        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+
+        // Skip if user is logged in
+        if (is_user_logged_in()) {
             return;
         }
-        
+
+        // Check if on login/registration pages
+        $login_url = wp_login_url();
+        $register_url = wp_registration_url();
+        $current_url = ( is_ssl() ? 'https://' : 'http://' ) . $_SERVER['HTTP_HOST'] . $request_uri;
+
+        if (strpos($current_url, $login_url) !== false || strpos($current_url, $register_url) !== false) {
+            return;
+        }
+
         // Skip wp-admin, wp-login.php, and system files
-        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
         $skip_paths = array('/wp-admin', '/wp-login.php', '/wp-cron.php', '/xmlrpc.php', '/wp-json');
         foreach ($skip_paths as $path) {
             if (strpos($request_uri, $path) !== false) {
